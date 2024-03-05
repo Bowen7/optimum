@@ -446,30 +446,27 @@ class ORTEncoderForVisionEncoderDecoder(ORTEncoder):
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
     def compute_encoder_known_output_shapes(self, pixel_values: torch.FloatTensor) -> Dict[str, List[int]]:
-        if self.normalized_config.model_type == "vit":
-            # for vit models
-            encoder_sequence_length = (
-                self.normalized_config.image_size // self.normalized_config.config.patch_size
-            ) ** 2 + 1  # plus cls token
-        elif self.normalized_config.config.model_type == "donut-swin":
-            # for donut-swin models
+        if self.normalized_config.config.model_type == "donut-swin":
+            # TODO: kind of weird to export to ONNX with dynamic output shape if it is in fact static...
             encoder_sequence_length = (
                 self.normalized_config.config.image_size[0]
                 * self.normalized_config.config.image_size[1]
                 // self.normalized_config.config.hidden_size
             )
+        elif self.normalized_config.config.model_type in ["vit", "deit"]:
+            return None
         else:
             raise ValueError(
                 f"Unsupported encoder model type {self.normalized_config.config.model_type} for ORTForVisionSeq2Seq with IOBinding."
-                "Currently supported models are vit and donut-swin."
+                "Currently supported models are vit, donut-swin and deit."
                 "Please submit a PR to add support for this model type."
             )
 
         return {
             "last_hidden_state": [
-                pixel_values.shape[0],  # batch_size
-                encoder_sequence_length,  # encoder_sequence_length
-                self.normalized_config.config.hidden_size,  # hidden_size
+                pixel_values.shape[0],  # batch size
+                encoder_sequence_length,
+                self.normalized_config.config.hidden_size,
             ]
         }
 
@@ -1155,6 +1152,7 @@ class ORTModelForSeq2SeqLM(ORTModelForConditionalGeneration, GenerationMixin):
             **kwargs,
         )
 
+        # The normalized_config initialization in ORTModelPart is unfortunately wrong as the top level config is initialized.
         if config.model_type == "encoder-decoder":
             self.encoder.normalized_config = NormalizedConfigManager.get_normalized_config_class(
                 config.encoder.model_type
@@ -1194,30 +1192,18 @@ class ORTModelForSeq2SeqLM(ORTModelForConditionalGeneration, GenerationMixin):
         if encoder_outputs is None:
             encoder_outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
 
-        # Decode
-        if past_key_values is None or self.use_cache is False:
-            decoder_outputs = self.decoder(
-                input_ids=decoder_input_ids,
-                encoder_hidden_states=encoder_outputs.last_hidden_state,
-                encoder_attention_mask=attention_mask,
-                labels=labels,
-            )
-        elif self.use_merged is True:
-            decoder_outputs = self.decoder(
-                input_ids=decoder_input_ids[:, -1:],
-                encoder_hidden_states=encoder_outputs.last_hidden_state,
-                past_key_values=past_key_values,
-                encoder_attention_mask=attention_mask,
-                labels=labels,
-            )
-        else:
-            decoder_outputs = self.decoder_with_past(
-                input_ids=decoder_input_ids[:, -1:],  # Cut decoder_input_ids if past is used
-                past_key_values=past_key_values,
-                encoder_hidden_states=encoder_outputs.last_hidden_state,
-                encoder_attention_mask=attention_mask,
-                labels=labels,
-            )
+        model = (
+            self.decoder
+            if past_key_values is None or not self.use_cache or self.use_merged
+            else self.decoder_with_past
+        )
+        decoder_outputs = model(
+            input_ids=decoder_input_ids,
+            past_key_values=past_key_values,
+            encoder_hidden_states=encoder_outputs.last_hidden_state,
+            encoder_attention_mask=attention_mask,
+            labels=labels,
+        )
 
         return Seq2SeqLMOutput(
             loss=decoder_outputs.get("loss", None),
@@ -1238,6 +1224,16 @@ class ORTModelForSeq2SeqLM(ORTModelForConditionalGeneration, GenerationMixin):
         encoder_outputs=None,
         **kwargs,
     ) -> Dict:
+        if past_key_values is not None:
+            past_length = past_key_values[0][0].shape[2]
+            # Some generation methods already pass only the last input ID
+            if input_ids.shape[1] > past_length:
+                remove_prefix_length = past_length
+            else:
+                # Default to old behavior: keep only final ID
+                remove_prefix_length = input_ids.shape[1] - 1
+            input_ids = input_ids[:, remove_prefix_length:]
+
         return {
             "decoder_input_ids": input_ids,
             "past_key_values": past_key_values,
@@ -1333,28 +1329,18 @@ class ORTModelForSpeechSeq2Seq(ORTModelForConditionalGeneration, GenerationMixin
         if encoder_outputs is None:
             encoder_outputs = self.encoder(input_features=input_features, attention_mask=attention_mask)
 
-        # Decode
-        if past_key_values is None or self.use_cache is False:
-            decoder_outputs = self.decoder(
-                input_ids=decoder_input_ids,
-                encoder_hidden_states=encoder_outputs.last_hidden_state,
-                labels=labels,
-            )
-        elif self.use_merged is True:
-            decoder_outputs = self.decoder(
-                input_ids=decoder_input_ids[:, -1:],
-                encoder_hidden_states=encoder_outputs.last_hidden_state,
-                past_key_values=past_key_values,
-                encoder_attention_mask=attention_mask,
-                labels=labels,
-            )
-        else:
-            decoder_outputs = self.decoder_with_past(
-                input_ids=decoder_input_ids[:, -1:],  # Cut decoder_input_ids if past is used
-                past_key_values=past_key_values,
-                encoder_hidden_states=encoder_outputs.last_hidden_state,
-                labels=labels,
-            )
+        model = (
+            self.decoder
+            if past_key_values is None or not self.use_cache or self.use_merged
+            else self.decoder_with_past
+        )
+        decoder_outputs = model(
+            input_ids=decoder_input_ids,
+            past_key_values=past_key_values,
+            encoder_hidden_states=encoder_outputs.last_hidden_state,
+            encoder_attention_mask=attention_mask,
+            labels=labels,
+        )
 
         return Seq2SeqLMOutput(
             loss=decoder_outputs.get("loss", None),
@@ -1374,6 +1360,16 @@ class ORTModelForSpeechSeq2Seq(ORTModelForConditionalGeneration, GenerationMixin
         encoder_outputs=None,
         **kwargs,
     ) -> Dict:
+        if past_key_values is not None:
+            past_length = past_key_values[0][0].shape[2]
+            # Some generation methods already pass only the last input ID
+            if input_ids.shape[1] > past_length:
+                remove_prefix_length = past_length
+            else:
+                # Default to old behavior: keep only final ID
+                remove_prefix_length = input_ids.shape[1] - 1
+            input_ids = input_ids[:, remove_prefix_length:]
+
         return {
             "decoder_input_ids": input_ids,
             "past_key_values": past_key_values,
@@ -1489,6 +1485,7 @@ class ORTModelForVision2Seq(ORTModelForConditionalGeneration, GenerationMixin):
             **kwargs,
         )
 
+        # The normalized_config initialization in ORTModelPart is unfortunately wrong as the top level config is initialized.
         self.encoder.normalized_config = NormalizedConfigManager.get_normalized_config_class(
             config.encoder.model_type
         )(config.encoder)
@@ -1496,6 +1493,11 @@ class ORTModelForVision2Seq(ORTModelForConditionalGeneration, GenerationMixin):
         self.decoder.normalized_config = NormalizedConfigManager.get_normalized_config_class(
             config.decoder.model_type
         )(config.decoder)
+
+        if self.decoder_with_past is not None:
+            self.decoder_with_past.normalized_config = NormalizedConfigManager.get_normalized_config_class(
+                config.decoder.model_type
+            )(config.decoder)
 
     def _initialize_encoder(self, session: ort.InferenceSession) -> ORTEncoder:
         return ORTEncoderForVisionEncoderDecoder(session, self)
@@ -1522,27 +1524,17 @@ class ORTModelForVision2Seq(ORTModelForConditionalGeneration, GenerationMixin):
         if encoder_outputs is None:
             encoder_outputs = self.encoder(pixel_values=pixel_values)
 
-        # Decode
-        if past_key_values is None or self.use_cache is False:
-            decoder_outputs = self.decoder(
-                input_ids=decoder_input_ids,
-                encoder_hidden_states=encoder_outputs.last_hidden_state,
-                labels=labels,
-            )
-        elif self.use_merged is True:
-            decoder_outputs = self.decoder(
-                input_ids=decoder_input_ids[:, -1:],
-                encoder_hidden_states=encoder_outputs.last_hidden_state,
-                past_key_values=past_key_values,
-                labels=labels,
-            )
-        else:
-            decoder_outputs = self.decoder_with_past(
-                input_ids=decoder_input_ids[:, -1:],  # Cut decoder_input_ids if past is used
-                past_key_values=past_key_values,
-                encoder_hidden_states=encoder_outputs.last_hidden_state,
-                labels=labels,
-            )
+        model = (
+            self.decoder
+            if past_key_values is None or not self.use_cache or self.use_merged
+            else self.decoder_with_past
+        )
+        decoder_outputs = model(
+            input_ids=decoder_input_ids,
+            past_key_values=past_key_values,
+            encoder_hidden_states=encoder_outputs.last_hidden_state,
+            labels=labels,
+        )
 
         return Seq2SeqLMOutput(
             loss=decoder_outputs.get("loss", None),
@@ -1561,6 +1553,16 @@ class ORTModelForVision2Seq(ORTModelForConditionalGeneration, GenerationMixin):
         encoder_outputs=None,
         **kwargs,
     ) -> Dict:
+        if past_key_values is not None:
+            past_length = past_key_values[0][0].shape[2]
+            # Some generation methods already pass only the last input ID
+            if input_ids.shape[1] > past_length:
+                remove_prefix_length = past_length
+            else:
+                # Default to old behavior: keep only final ID
+                remove_prefix_length = input_ids.shape[1] - 1
+            input_ids = input_ids[:, remove_prefix_length:]
+
         return {
             "decoder_input_ids": input_ids,
             "past_key_values": past_key_values,
@@ -1637,34 +1639,19 @@ class ORTModelForPix2Struct(ORTModelForConditionalGeneration, GenerationMixin):
         else:
             attention_mask = attention_mask.astype(np.int64)
 
-        # Decode
-        if past_key_values is None or self.use_cache is False:
-            decoder_outputs = self.decoder(
-                input_ids=decoder_input_ids,
-                decoder_attention_mask=decoder_attention_mask,
-                past_key_values=past_key_values,
-                encoder_hidden_states=encoder_outputs.last_hidden_state,
-                encoder_attention_mask=attention_mask,
-                labels=labels,
-            )
-        elif self.use_merged is True:
-            decoder_outputs = self.decoder(
-                input_ids=decoder_input_ids[:, -1:],
-                decoder_attention_mask=decoder_attention_mask,
-                past_key_values=past_key_values,
-                encoder_hidden_states=encoder_outputs.last_hidden_state,
-                encoder_attention_mask=attention_mask,
-                labels=labels,
-            )
-        else:
-            decoder_outputs = self.decoder_with_past(
-                input_ids=decoder_input_ids[:, -1:],  # Cut decoder_input_ids if past is used
-                decoder_attention_mask=decoder_attention_mask,
-                past_key_values=past_key_values,
-                encoder_hidden_states=encoder_outputs.last_hidden_state,
-                encoder_attention_mask=attention_mask,
-                labels=labels,
-            )
+        model = (
+            self.decoder
+            if past_key_values is None or not self.use_cache or self.use_merged
+            else self.decoder_with_past
+        )
+        decoder_outputs = model(
+            input_ids=decoder_input_ids,
+            decoder_attention_mask=decoder_attention_mask,
+            past_key_values=past_key_values,
+            encoder_hidden_states=encoder_outputs.last_hidden_state,
+            encoder_attention_mask=attention_mask,
+            labels=labels,
+        )
 
         return Seq2SeqLMOutput(
             loss=decoder_outputs.get("loss", None),
@@ -1686,6 +1673,16 @@ class ORTModelForPix2Struct(ORTModelForConditionalGeneration, GenerationMixin):
         encoder_outputs=None,
         **kwargs,
     ) -> Dict:
+        if past_key_values is not None:
+            past_length = past_key_values[0][0].shape[2]
+            # Some generation methods already pass only the last input ID
+            if input_ids.shape[1] > past_length:
+                remove_prefix_length = past_length
+            else:
+                # Default to old behavior: keep only final ID
+                remove_prefix_length = input_ids.shape[1] - 1
+            input_ids = input_ids[:, remove_prefix_length:]
+
         if decoder_attention_mask is None:
             decoder_attention_mask = torch.ones_like(input_ids).to(input_ids.device)
 

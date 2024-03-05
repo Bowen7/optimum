@@ -72,6 +72,17 @@ PYTORCH_EXPORT_MODELS_TINY = {
         ],
         "mohitsha/tiny-random-testing-bert2gpt2": ["text2text-generation", "text2text-generation-with-past"],
     },
+    "falcon": {
+        "fxmarty/really-tiny-falcon-testing": [
+            "feature-extraction",
+            "feature-extraction-with-past",
+            "question-answering",
+            "text-generation",
+            "text-generation-with-past",
+            "token-classification",
+        ],
+        "fxmarty/tiny-testing-falcon-alibi": ["text-generation", "text-generation-with-past"],
+    },
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt-bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
@@ -91,6 +102,7 @@ PYTORCH_EXPORT_MODELS_TINY = {
     "m2m-100": "hf-internal-testing/tiny-random-m2m_100",
     "marian": "sshleifer/tiny-marian-en-de",  # hf-internal-testing ones are broken
     "mbart": "hf-internal-testing/tiny-random-mbart",
+    "mistral": "echarlaix/tiny-random-mistral",
     "mobilebert": "hf-internal-testing/tiny-random-MobileBertModel",
     "mobilenet-v2": "hf-internal-testing/tiny-random-MobileNetV2Model",
     "mobilenet-v1": "google/mobilenet_v1_0.75_192",
@@ -118,8 +130,10 @@ PYTORCH_EXPORT_MODELS_TINY = {
     "splinter": "hf-internal-testing/tiny-random-SplinterModel",
     "squeezebert": "hf-internal-testing/tiny-random-SqueezeBertModel",
     "swin": "hf-internal-testing/tiny-random-SwinModel",
+    "swin2sr": "hf-internal-testing/tiny-random-Swin2SRModel",
     "t5": "hf-internal-testing/tiny-random-t5",
     "vit": "hf-internal-testing/tiny-random-vit",
+    "vits": "echarlaix/tiny-random-vits",
     "yolos": "hf-internal-testing/tiny-random-YolosModel",
     "whisper": "openai/whisper-tiny.en",  # hf-internal-testing ones are broken
     "hubert": "hf-internal-testing/tiny-random-HubertModel",
@@ -150,6 +164,7 @@ PYTORCH_EXPORT_MODELS_TINY = {
     # Disabled for now because some operator seems to not be supported by ONNX.
     # "mctct": "hf-internal-testing/tiny-random-MCTCTModel",
     "speech-to-text": "hf-internal-testing/tiny-random-Speech2TextModel",
+    "speecht5": "hf-internal-testing/tiny-random-SpeechT5ForTextToSpeech",
     "xlm": "hf-internal-testing/tiny-random-XLMModel",
     "xlm-roberta": "hf-internal-testing/tiny-xlm-roberta",
     "vision-encoder-decoder": {
@@ -157,7 +172,7 @@ PYTORCH_EXPORT_MODELS_TINY = {
             "image-to-text",
             "image-to-text-with-past",
         ],
-        "microsoft/trocr-small-handwritten": ["image-to-text"],
+        "microsoft/trocr-small-handwritten": ["image-to-text", "image-to-text-with-past"],
         "fxmarty/tiny-doc-qa-vision-encoder-decoder": [
             "document-question-answering",
             "document-question-answering-with-past",
